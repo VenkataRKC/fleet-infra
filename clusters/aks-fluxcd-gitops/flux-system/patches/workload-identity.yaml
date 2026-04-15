@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ServiceAccount
-etadata:
-  name: flux-source-controller
+metadata:
+  name: source-controller
   namespace: flux-system
   annotations:
     # Associate the service account with the user-assigned managed identity
@@ -12,7 +12,7 @@ etadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: flux-kustomize-controller
+  name: kustomize-controller
   namespace: flux-system
   annotations:
     # Associate the service account with the user-assigned managed identity
