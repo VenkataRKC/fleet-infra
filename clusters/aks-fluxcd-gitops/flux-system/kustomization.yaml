@@ -5,5 +5,3 @@ resources:
   - gotk-sync.yaml
 patches:
   - path: patches/workload-identity.yaml
-    target:
-      kind: ServiceAccount
