@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: source-controller
+  namespace: flux-system
+  annotations:
+    # Associate the service account with the user-assigned managed identity
+    azure.workload.identity/client-id: "a89b9be6-6b0a-4bcc-9bed-9a21431f5a21"
+  labels:
+    azure.workload.identity/use: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kustomize-controller
+  namespace: flux-system
+  annotations:
+    # Associate the service account with the user-assigned managed identity
+    azure.workload.identity/client-id: "a89b9be6-6b0a-4bcc-9bed-9a21431f5a21"
+  labels:
+    azure.workload.identity/use: "true"
