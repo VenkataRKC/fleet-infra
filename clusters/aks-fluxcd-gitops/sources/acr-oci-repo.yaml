@@ -1,0 +1,13 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: app-manifests
+  namespace: flux-system
+spec:
+  interval: 5m
+  url: oci://acrfluxcdgitops.azurecr.io/manifests/app
+  ref:
+    tag: latest
+  provider: azure
+  # The 'azure' provider tells Flux to use workload identity
+  # or managed identity for authentication automatically
