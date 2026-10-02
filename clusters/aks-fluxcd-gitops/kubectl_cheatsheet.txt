@@ -1,0 +1,586 @@
+KUBECTL ADVANCED CHEAT SHEET 
+======================================
+
+REFERENCE ONLY - THESE CHEAT-SHEET COMMANDS WERE NOT EXECUTED.
+
+All examples target the UAT cluster explicitly. Replace namespace, workload, pod,
+container, and resource names before running a command. Sections marked MUTATING
+change cluster state.
+
+
+SETUP AND SAFE UAT WRAPPER
+--------------------------
+
+$uatKubeconfig = 'C:\Users\rchillara\.kube\config'
+$uatContext = 'azusscuomsaks01'
+
+# Optional PowerShell wrapper. Example: ku get pods -A
+function ku {
+  kubectl --kubeconfig $uatKubeconfig --context $uatContext @args
+}
+
+ku config current-context
+ku cluster-info
+ku get namespaces
+ku get nodes -o wide
+ku auth can-i get pods --all-namespaces
+ku auth can-i --list -n oms
+
+
+API DISCOVERY AND BUILT-IN DOCUMENTATION
+----------------------------------------
+
+ku api-resources
+ku api-resources --namespaced=true
+ku api-resources --namespaced=false
+ku api-resources --verbs=list --namespaced=true -o name
+ku api-versions
+ku explain deployment
+ku explain deployment.spec
+ku explain deployment.spec.strategy
+ku explain pod.spec.containers --recursive
+
+
+INVENTORY AND FILTERING
+-----------------------
+
+ku get pods -A -o wide
+ku get deploy,statefulset,daemonset -A
+ku get service,ingress,endpoints,endpointslice -A
+ku get pods -n oms --show-labels
+ku get pods -n oms -l app=my-app -o wide
+ku get pods -A --field-selector=status.phase!=Running
+ku get pods -A --field-selector=status.phase=Pending
+ku get events -A --field-selector=type=Warning
+ku get pods -A --sort-by=.metadata.creationTimestamp
+ku get events -n oms --sort-by=.lastTimestamp
+
+
+CUSTOM OUTPUT, JSONPATH, AND YAML
+--------------------------------
+
+ku get pods -n oms `
+  -o custom-columns='NAME:.metadata.name,STATUS:.status.phase,NODE:.spec.nodeName,IP:.status.podIP'
+
+ku get pods -n oms `
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}'
+
+ku get pods -n oms `
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .status.containerStatuses[*]}{.name}{"="}{.ready}{" "}{end}{"\n"}{end}'
+
+ku get deployment my-app -n oms -o yaml
+ku get pod my-pod -n oms -o json
+ku get serviceaccount appconfig-sa -n oms `
+  -o jsonpath='{.metadata.annotations.azure\.workload\.identity/client-id}'
+
+
+WATCHES AND EVENTS
+------------------
+
+ku get pods -n oms --watch
+ku get events -n oms --watch
+ku get deployment my-app -n oms --watch
+ku events -n oms --types=Warning
+ku events -n oms --for deployment/my-app
+
+
+DESCRIBE AND FAILURE TRIAGE
+---------------------------
+
+ku describe pod my-pod -n oms
+ku describe deployment my-app -n oms
+ku describe node my-node
+ku get pod my-pod -n oms `
+  -o jsonpath='{range .status.conditions[*]}{.type}{"="}{.status}{" reason="}{.reason}{" message="}{.message}{"\n"}{end}'
+
+ku get pod my-pod -n oms `
+  -o jsonpath='{range .status.containerStatuses[*]}{.name}{" restarts="}{.restartCount}{" waiting="}{.state.waiting.reason}{" terminated="}{.state.terminated.reason}{"\n"}{end}'
+
+
+LOGS
+----
+
+ku logs my-pod -n oms
+ku logs my-pod -n oms -c my-container
+ku logs my-pod -n oms --all-containers=true
+ku logs my-pod -n oms --all-containers=true --prefix --timestamps
+ku logs my-pod -n oms --previous -c my-container
+ku logs my-pod -n oms --since=30m --timestamps
+ku logs my-pod -n oms --tail=200 --follow
+ku logs deployment/my-app -n oms --all-pods=true --prefix
+ku logs -n oms -l app=my-app --all-containers=true --prefix --tail=100
+
+
+EXEC, COPY, AND EPHEMERAL DEBUGGING
+----------------------------------
+
+ku exec -n oms -it my-pod -- /bin/sh
+ku exec -n oms my-pod -c my-container -- printenv
+ku exec -n oms my-pod -- cat /etc/resolv.conf
+ku cp -n oms my-pod:/tmp/diagnostic.txt .\diagnostic.txt
+
+# MUTATING: adds an ephemeral debug container to the selected pod.
+ku debug -n oms -it pod/my-pod --image=nicolaka/netshoot:latest --target=my-container
+
+# MUTATING: creates a node-debug pod. Remove it after diagnosis.
+ku debug node/my-node -it --image=ubuntu:24.04
+
+
+RESOURCE USAGE
+--------------
+
+ku top nodes
+ku top pods -A
+ku top pods -n oms --containers
+ku top pods -n oms --sort-by=cpu
+ku top pods -n oms --sort-by=memory
+
+
+ROLLOUTS AND WORKLOAD CONTROL
+-----------------------------
+
+ku rollout status deployment/my-app -n oms --timeout=5m
+ku rollout history deployment/my-app -n oms
+ku rollout history deployment/my-app -n oms --revision=2
+ku get replicaset -n oms -l app=my-app
+
+# MUTATING: restart, undo, or scale a workload.
+ku rollout restart deployment/my-app -n oms
+ku rollout undo deployment/my-app -n oms
+ku rollout undo deployment/my-app -n oms --to-revision=2
+ku scale deployment/my-app -n oms --replicas=3
+
+
+SCALING PODS, DEPLOYMENTS, AND STATEFULSETS - MUTATING
+-----------------------------------------------------
+
+Individual Pods cannot be scaled. Scale their owning Deployment, StatefulSet,
+ReplicaSet, or another controller. A standalone Pod must be replaced by a
+controller-managed workload before it can be scaled safely.
+
+# Read-only: identify the Pod owner and current controller replica counts.
+ku get pod my-pod -n oms `
+  -o jsonpath='{range .metadata.ownerReferences[*]}{.kind}{"/"}{.name}{"\n"}{end}'
+ku get deployment,statefulset,replicaset,hpa -n oms
+ku get deployment my-app -n oms `
+  -o custom-columns='NAME:.metadata.name,DESIRED:.spec.replicas,READY:.status.readyReplicas,AVAILABLE:.status.availableReplicas'
+ku get statefulset my-stateful-app -n oms `
+  -o custom-columns='NAME:.metadata.name,DESIRED:.spec.replicas,READY:.status.readyReplicas,CURRENT:.status.currentReplicas'
+
+# MUTATING: scale a Deployment.
+ku scale deployment/my-app -n oms --replicas=3
+ku rollout status deployment/my-app -n oms --timeout=5m
+
+# MUTATING: scale only when the current replica count is exactly 2.
+ku scale deployment/my-app -n oms --current-replicas=2 --replicas=3
+
+# MUTATING: scale a StatefulSet. Scale-down removes the highest ordinal first;
+# inspect persistent volume retention and application quorum before doing this.
+ku scale statefulset/my-stateful-app -n oms --replicas=3
+ku rollout status statefulset/my-stateful-app -n oms --timeout=10m
+
+# MUTATING: scale more than one controller explicitly.
+ku scale deployment/frontend deployment/backend -n oms --replicas=3
+
+# MUTATING: create an HPA for a Deployment. Metrics Server and resource requests
+# must be configured. Prefer storing the HPA manifest in Git for GitOps workloads.
+ku autoscale deployment/my-app -n oms `
+  --min=2 `
+  --max=10 `
+  --cpu-percent=70
+
+ku get hpa -n oms
+ku describe hpa my-app -n oms
+ku get hpa my-app -n oms --watch
+
+# MUTATING: remove the example HPA before manually controlling replicas again.
+ku delete hpa my-app -n oms
+
+
+POD AFFINITY AND ANTI-AFFINITY - REFERENCE MANIFEST
+---------------------------------------------------
+
+Affinity is configured in a Pod template, not with a standalone kubectl affinity
+command. For GitOps-managed workloads, commit the manifest change and let Argo CD
+apply it. Use stable workload labels and a topology key present on eligible nodes.
+
+# Read-only discovery and inspection.
+ku explain deployment.spec.template.spec.affinity --recursive
+ku get nodes --show-labels
+ku get deployment my-app -n oms -o yaml
+ku get pods -n oms -l app.kubernetes.io/name=my-app -o wide
+
+# Example fragment under Deployment spec.template.spec.
+# podAffinity prefers placement near Pods labeled app.kubernetes.io/name=backend.
+# podAntiAffinity prefers spreading my-app Pods across nodes.
+
+affinity:
+  podAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 50
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: backend
+          topologyKey: kubernetes.io/hostname
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: my-app
+          topologyKey: kubernetes.io/hostname
+
+# Required anti-affinity is stricter and can leave Pods Pending when there are not
+# enough eligible topology domains. Use it only when hard separation is required.
+
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: my-app
+        topologyKey: kubernetes.io/hostname
+
+# Validate and compare a complete manifest containing the fragment.
+ku apply --dry-run=server -f my-app-deployment.yaml -o yaml
+ku diff -f my-app-deployment.yaml
+
+# MUTATING: direct apply. Prefer Git/Argo CD when the workload is GitOps-managed.
+ku apply -f my-app-deployment.yaml
+ku rollout status deployment/my-app -n oms --timeout=5m
+
+
+TAINTS AND TOLERATIONS - REFERENCE MANIFEST
+-------------------------------------------
+
+A toleration permits scheduling onto a matching tainted node; it does not guarantee
+placement there. Combine it with node affinity or a node selector when placement is
+required. Confirm the taint key, value, and effect before adding a toleration.
+
+# Read-only: inspect node taints and workload tolerations.
+ku get nodes `
+  -o custom-columns='NODE:.metadata.name,TAINTS:.spec.taints[*].key,VALUES:.spec.taints[*].value,EFFECTS:.spec.taints[*].effect'
+ku describe node my-node
+ku get deployment my-app -n oms `
+  -o jsonpath='{range .spec.template.spec.tolerations[*]}{.key}{"="}{.value}{":"}{.effect}{"\n"}{end}'
+ku explain deployment.spec.template.spec.tolerations --recursive
+
+# Example fragment under Deployment spec.template.spec.
+tolerations:
+  - key: workload
+    operator: Equal
+    value: oms
+    effect: NoSchedule
+
+# Example toleration for a key regardless of value.
+tolerations:
+  - key: dedicated
+    operator: Exists
+    effect: NoSchedule
+
+# Example node affinity paired with a toleration. Nodes must already have the
+# workload=oms label and matching taint.
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: workload
+              operator: In
+              values:
+                - oms
+tolerations:
+  - key: workload
+    operator: Equal
+    value: oms
+    effect: NoSchedule
+
+# Validate, diff, and then apply through the approved workflow.
+ku apply --dry-run=server -f my-app-deployment.yaml -o yaml
+ku diff -f my-app-deployment.yaml
+ku apply -f my-app-deployment.yaml
+
+
+PODDISRUPTIONBUDGET (PDB) - REFERENCE MANIFEST
+----------------------------------------------
+
+A PDB limits voluntary disruptions such as node drains. It does not protect against
+involuntary node failure and does not control Deployment rolling-update behavior.
+The selector must match the workload's Pod-template labels.
+
+# Read-only: inspect labels, replica count, and existing PDBs.
+ku get deployment my-app -n oms --show-labels
+ku get pods -n oms -l app.kubernetes.io/name=my-app --show-labels
+ku get poddisruptionbudget -n oms
+ku describe poddisruptionbudget my-app-pdb -n oms
+ku explain poddisruptionbudget.spec --recursive
+
+# Example PDB: keep at least two matching Pods available.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: my-app-pdb
+  namespace: oms
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: my-app
+
+# Alternative: allow at most one unavailable Pod. Use either maxUnavailable or
+# minAvailable, not both.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: my-app-pdb
+  namespace: oms
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: my-app
+
+# Validate and compare the complete PDB manifest.
+ku apply --dry-run=server -f my-app-pdb.yaml -o yaml
+ku diff -f my-app-pdb.yaml
+
+# MUTATING: direct apply/delete. Prefer Git/Argo CD for managed resources.
+ku apply -f my-app-pdb.yaml
+ku delete poddisruptionbudget my-app-pdb -n oms
+
+# Observe allowed disruptions before draining a node.
+ku get poddisruptionbudget my-app-pdb -n oms `
+  -o custom-columns='NAME:.metadata.name,MIN:.spec.minAvailable,MAX_UNAVAILABLE:.spec.maxUnavailable,ALLOWED:.status.disruptionsAllowed,CURRENT_HEALTHY:.status.currentHealthy,DESIRED_HEALTHY:.status.desiredHealthy'
+
+
+POD AND RESOURCE DELETION - MUTATING
+------------------------------------
+
+Deleting a pod managed by a Deployment, StatefulSet, or DaemonSet normally causes
+its controller to create a replacement. If Argo CD owns a deleted manifest, Argo
+may recreate it. Inspect ownership and disruption budgets before deleting anything.
+
+# Read-only prechecks.
+ku get pod my-pod -n oms -o wide
+ku describe pod my-pod -n oms
+ku get pod my-pod -n oms `
+  -o jsonpath='{range .metadata.ownerReferences[*]}{.kind}{"/"}{.name}{"\n"}{end}'
+ku get poddisruptionbudget -n oms
+ku get events -n oms --field-selector involvedObject.name=my-pod
+
+# Preview label selection before using it with delete.
+ku get pods -n oms -l app=my-app -o name
+
+# MUTATING: gracefully delete one pod and wait for completion.
+ku delete pod my-pod -n oms --wait=true --timeout=2m
+
+# MUTATING: gracefully delete selected pods. Verify the selector above first.
+ku delete pods -n oms -l app=my-app --wait=true --timeout=5m
+
+# MUTATING: delete resources defined by a manifest or Kustomization.
+ku delete -f manifest.yaml
+ku delete -k infra/oms/environments/uat/my-component
+
+# MUTATING: delete a completed Job and its owned pods.
+ku delete job my-job -n oms
+
+# Read-only: locate Failed or Evicted pods before deleting exact names.
+ku get pods -A --field-selector=status.phase=Failed -o wide
+ku get pods -n oms `
+  -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,REASON:.status.reason' `
+  --no-headers
+
+# MUTATING AND DISRUPTIVE: force deletion bypasses graceful shutdown. Use only for
+# a pod confirmed stuck in Terminating after checking node and storage health.
+ku delete pod my-stuck-pod -n oms --grace-period=0 --force
+
+# HIGH RISK: never run --all until namespace and resource types are verified.
+ku get pods,services -n my-namespace
+ku delete pods,services -n my-namespace --all
+
+
+NODE MAINTENANCE - MUTATING AND DISRUPTIVE
+------------------------------------------
+
+# Read-only prechecks.
+ku get node my-node -o wide
+ku describe node my-node
+ku get pods -A --field-selector=spec.nodeName=my-node -o wide
+ku get poddisruptionbudget -A
+
+# MUTATING: stop new scheduling, evict workloads, then restore scheduling.
+ku cordon my-node
+ku drain my-node --ignore-daemonsets --delete-emptydir-data --timeout=15m
+ku uncordon my-node
+
+# Do not add --force or --disable-eviction without understanding the workloads and
+# PodDisruptionBudgets that those flags bypass.
+
+
+MANIFEST VALIDATION, DIFF, AND APPLY
+-----------------------------------
+
+ku kustomize infra/oms/environments/uat
+ku apply --dry-run=server -f manifest.yaml
+ku apply --dry-run=server -k infra/oms/environments/uat
+ku diff -f manifest.yaml
+ku diff -k infra/oms/environments/uat
+
+# MUTATING: applies manifests to UAT.
+ku apply -f manifest.yaml
+ku apply -k infra/oms/environments/uat
+
+# MUTATING: prefer a reviewed manifest change through GitOps when Argo owns it.
+ku set image deployment/my-app my-container=myregistry/my-image:tag -n oms
+ku annotate deployment/my-app example.com/change-ticket=CHG123 -n oms --overwrite
+ku label pod my-pod support-session=true -n oms --overwrite
+
+
+NETWORKING AND DNS
+------------------
+
+ku get service,endpoints,endpointslice -n oms -o wide
+ku describe service my-service -n oms
+ku get networkpolicy -A
+ku get ingress -A
+ku get gatewayclass,gateway,httproute -A
+
+# MUTATING: temporary DNS/network test pod; delete it after testing.
+ku run network-debug `
+  --image=nicolaka/netshoot:latest `
+  --restart=Never `
+  --command -- sleep 900
+
+ku wait --for=condition=Ready pod/network-debug --timeout=120s
+ku exec network-debug -- cat /etc/resolv.conf
+ku exec network-debug -- getent ahostsv4 kubernetes.default.svc.cluster.local
+ku exec network-debug -- nslookup my-service.oms.svc.cluster.local
+ku exec network-debug -- nc -zvw5 my-service.oms.svc.cluster.local 443
+ku exec network-debug -- curl -vk --connect-timeout 5 https://my-service.oms.svc.cluster.local/
+
+# MUTATING: removes only the temporary diagnostic pod.
+ku delete pod network-debug --wait=true
+
+
+PORT FORWARDING AND LOCAL ACCESS
+--------------------------------
+
+ku -n argocd port-forward service/argocd-server 8080:443
+ku -n oms port-forward service/my-service 8080:80
+ku -n oms port-forward pod/my-pod 8080:8080
+
+
+SECRETS AND CONFIGMAPS
+----------------------
+
+# Metadata only; avoids printing secret values.
+ku get secrets -n oms
+ku describe secret my-secret -n oms
+ku get configmaps -n oms
+ku describe configmap my-config -n oms
+
+# CAUTION: the following prints decoded secret material to the terminal.
+ku get secret my-secret -n oms `
+  -o jsonpath='{.data.my-key}' |
+  ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) }
+
+
+WORKLOAD IDENTITY, APP CONFIGURATION, AND KEY VAULT CSI
+------------------------------------------------------
+
+ku get serviceaccount appconfig-sa -n oms -o yaml
+ku get pods -n oms -l azure.workload.identity/use=true -o wide
+ku get azureappconfigurationprovider -A
+ku describe azureappconfigurationprovider my-provider -n oms
+ku get secretproviderclass -A
+ku describe secretproviderclass my-provider -n oms
+ku get csidriver
+ku get daemonset,pod -n kube-system -l app=secrets-store-csi-driver -o wide
+ku get daemonset,pod -n kube-system -l app=secrets-store-provider-azure -o wide
+
+
+ARGO CD AND GITOPS OBSERVABILITY
+--------------------------------
+
+ku get applications.argoproj.io -n argocd
+ku get application oms-root -n argocd -o wide
+ku describe application oms-root -n argocd
+ku get application oms-root -n argocd `
+  -o jsonpath='{.status.sync.status}{"\t"}{.status.health.status}{"\t"}{.status.sync.revision}{"\n"}'
+ku get pods -n argocd -o wide
+ku logs deployment/argocd-repo-server -n argocd --tail=200
+ku logs statefulset/argocd-application-controller -n argocd --tail=200
+
+
+RBAC AND AUTHORIZATION TROUBLESHOOTING
+--------------------------------------
+
+ku auth whoami
+ku auth can-i get secrets -n oms
+ku auth can-i create pods/exec -n oms
+ku auth can-i --list -n oms
+ku get role,rolebinding -n oms
+ku get clusterrole,clusterrolebinding
+ku describe rolebinding my-binding -n oms
+
+
+CLIENT-SIDE GENERATION, VERBOSITY, AND COMPLETION
+------------------------------------------------
+
+# These generate YAML locally and do not create cluster resources.
+ku create deployment nginx --image=nginx --dry-run=client -o yaml
+ku run busybox --image=busybox:1.36 --restart=Never --dry-run=client -o yaml
+ku create job hello --image=busybox:1.36 --dry-run=client -o yaml -- echo hello
+
+# Increase client verbosity when diagnosing API requests. Higher levels may print
+# request details; review output before sharing it.
+ku get pod my-pod -n oms --v=6
+ku get pod my-pod -n oms --v=8
+
+# PowerShell completion for the current shell. This is local only.
+kubectl completion powershell | Out-String | Invoke-Expression
+
+
+FINAL SAFETY CHECK BEFORE A MUTATING COMMAND
+--------------------------------------------
+
+ku config current-context
+ku cluster-info
+
+# For manifests, preview the exact server-side result first.
+ku apply --dry-run=server -f manifest.yaml -o yaml
+ku diff -f manifest.yaml
+
+
+OFFICIAL REFERENCES
+-------------------
+
+The generic examples above were adapted for the explicit UAT wrapper from the
+official Kubernetes quick reference. The reference was read on 2026-09-27; none of
+its kubectl examples were executed while preparing this file.
+
+GitHub source:
+https://github.com/kubernetes/website/blob/main/content/en/docs/reference/kubectl/quick-reference.md
+
+Rendered documentation:
+https://kubernetes.io/docs/reference/kubectl/quick-reference/
+
+kubectl command reference:
+https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands
+
+Deployment scaling:
+https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#scaling-a-deployment
+
+StatefulSet scaling:
+https://kubernetes.io/docs/tasks/run-application/scale-stateful-set/
+
+Pod affinity and anti-affinity:
+https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity
+
+Taints and tolerations:
+https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+
+PodDisruptionBudgets:
+https://kubernetes.io/docs/tasks/run-application/configure-pdb/
